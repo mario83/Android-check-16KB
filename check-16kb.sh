@@ -153,8 +153,20 @@ check_so_file() {
     local filename=$(basename "$so_file")
     local has_error=false
     local error_details=""
+
+    # 1. Verifica architettura (Header)
+    local header_out
+    header_out=$("$READOBJ" --file-header "$so_file" 2>&1)
+
+    local required_align=$MIN_ALIGN
+    local arch_label="64-bit"
+
+    if [[ "$header_out" =~ Class:[[:space:]]*32-bit ]]; then
+        required_align=4096
+        arch_label="32-bit"
+    fi
     
-    # Esegui llvm-readobj
+    # 2. Esegui llvm-readobj per Program Headers
     local output
     output=$("$READOBJ" --program-headers "$so_file" 2>&1)
     
@@ -173,10 +185,10 @@ check_so_file() {
         if [[ "$line" =~ Type:.*PT_LOAD ]]; then
             # Verifica segmento precedente se c'era
             if $in_load && [[ $seg_num -gt 0 ]]; then
-                # Verifica alignment >= 16384
-                if [[ $align -lt $MIN_ALIGN ]]; then
+                # Verifica alignment
+                if [[ $align -lt $required_align ]]; then
                     has_error=true
-                    error_details="${error_details}Seg$seg_num: align=$align (< 16384); "
+                    error_details="${error_details}Seg$seg_num: align=$align (< $required_align); "
                 fi
                 # Verifica congruenza (vaddr % align == offset % align)
                 if [[ $align -gt 0 ]]; then
@@ -197,9 +209,9 @@ check_so_file() {
         # Fine segmento (altro tipo)
         if [[ "$line" =~ ^[[:space:]]*Type: ]] && ! [[ "$line" =~ PT_LOAD ]]; then
             if $in_load && [[ $seg_num -gt 0 ]]; then
-                if [[ $align -lt $MIN_ALIGN ]]; then
+                if [[ $align -lt $required_align ]]; then
                     has_error=true
-                    error_details="${error_details}Seg$seg_num: align=$align (< 16384); "
+                    error_details="${error_details}Seg$seg_num: align=$align (< $required_align); "
                 fi
                 if [[ $align -gt 0 ]]; then
                     local vmod=$((vaddr % align))
@@ -228,9 +240,9 @@ check_so_file() {
     
     # Verifica ultimo segmento
     if $in_load && [[ $seg_num -gt 0 ]]; then
-        if [[ $align -lt $MIN_ALIGN ]]; then
+        if [[ $align -lt $required_align ]]; then
             has_error=true
-            error_details="${error_details}Seg$seg_num: align=$align (< 16384); "
+            error_details="${error_details}Seg$seg_num: align=$align (< $required_align); "
         fi
         if [[ $align -gt 0 ]]; then
             local vmod=$((vaddr % align))
@@ -244,11 +256,11 @@ check_so_file() {
     
     # Output risultato
     if $has_error; then
-        echo -e "  ${RED}✗ $filename${NC}"
+        echo -e "  ${RED}✗ $filename ($arch_label)${NC}"
         echo -e "    ${YELLOW}$error_details${NC}"
         return 1
     else
-        echo -e "  ${GREEN}✓ $filename${NC}"
+        echo -e "  ${GREEN}✓ $filename ($arch_label)${NC}"
         return 0
     fi
 }
